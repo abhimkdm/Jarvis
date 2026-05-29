@@ -6,14 +6,12 @@ class LLMManager:
         self.client = OpenAI(base_url=base_url, api_key="ollama")
         self.model = model
 
-    def generate_response(self, prompt, system_instruction):
+    def generate_response(self, messages_payload):
+        """Accepts complete contextual list array instead of just a raw string."""
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages_payload,
             )
             content = response.choices[0].message.content
             return (content or "").strip()

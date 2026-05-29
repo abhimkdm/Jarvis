@@ -1,9 +1,10 @@
 import asyncio
+import importlib
+import pkgutil
 import sys
 
 import yaml
 
-from src.audio import OfflineAudioInput
 from src.llm import LLMManager
 from src.tts import TTSManager
 from src.tray import TrayManager
@@ -16,13 +17,38 @@ brain = LLMManager(
     model=config["llm"]["model"],
 )
 voice = TTSManager(voice=config["tts"]["voice"])
-audio_input = OfflineAudioInput(
-    model_path=config["audio"]["model_path"],
-    bin_path=config["audio"]["bin_path"],
-)
+
+PLUGINS = []
+memory_plugin = None
+manual_input_plugin = None
 
 SYSTEM_RUNNING = True
 SHOULD_LISTEN = False
+
+
+def discover_plugins():
+    global memory_plugin, manual_input_plugin
+    import plugins
+
+    print("\n[System OS: Indexing decentralized features...]")
+
+    for _, module_name, is_pkg in pkgutil.iter_modules(plugins.__path__):
+        if not is_pkg:
+            continue
+
+        mod = importlib.import_module(f"plugins.{module_name}")
+
+        for attribute_name in dir(mod):
+            attribute = getattr(mod, attribute_name)
+            if isinstance(attribute, type) and attribute_name.endswith("Plugin"):
+                plugin_instance = attribute()
+                PLUGINS.append(plugin_instance)
+                print(f" -> Successfully mounted plugin: {attribute_name}")
+
+                if attribute_name == "ChatMemoryPlugin":
+                    memory_plugin = plugin_instance
+                elif attribute_name == "ManualInputPlugin":
+                    manual_input_plugin = plugin_instance
 
 
 def handle_tray_toggle(listening_status):
@@ -37,6 +63,8 @@ def handle_tray_exit():
     print("[System UI: Initiating shutdown]")
 
 
+discover_plugins()
+
 tray = TrayManager(
     toggle_callback=handle_tray_toggle,
     exit_callback=handle_tray_exit,
@@ -44,9 +72,45 @@ tray = TrayManager(
 )
 
 
-async def voice_assistant_loop():
+async def process_user_input(user_text: str) -> None:
+    if "exit" in user_text.lower() or "shutdown" in user_text.lower():
+        global SYSTEM_RUNNING
+        SYSTEM_RUNNING = False
+        await voice.speak("Powering down.")
+        return
+
+    llm_context = {"messages": []}
+    for plugin in PLUGINS:
+        plugin.execute(user_text, context=llm_context)
+
+    for plugin in PLUGINS:
+        command_reply = plugin.execute(user_text)
+        if command_reply:
+            await voice.speak(command_reply)
+            return
+
+    payload = [{"role": "system", "content": config["assistant"]["system_prompt"]}]
+    payload.extend(llm_context["messages"])
+    payload.append({"role": "user", "content": user_text})
+
+    reply = brain.generate_response(payload)
+
+    if memory_plugin:
+        memory_plugin.update_memory(user_text, reply)
+
+    await voice.speak(reply)
+
+
+async def main_loop():
+    from src.audio import OfflineAudioInput
+
+    audio_engine = OfflineAudioInput(
+        model_path=config["audio"]["model_path"],
+        bin_path=config["audio"]["bin_path"],
+    )
+
     try:
-        audio_input.validate()
+        audio_engine.validate()
     except FileNotFoundError as exc:
         print(f"[Setup error]\n{exc}", file=sys.stderr)
         await voice.speak(
@@ -55,29 +119,38 @@ async def voice_assistant_loop():
         return
 
     await voice.speak(
-        "Systems initialized and running in your taskbar background, sir. "
+        "Systems fully decentralized. Keyboard override active. "
         "Press Control 1 to begin listening."
     )
 
     while SYSTEM_RUNNING:
         if SHOULD_LISTEN:
-            user_text = await asyncio.to_thread(audio_input.listen_and_transcribe)
-            if user_text:
-                reply = brain.generate_response(
-                    prompt=user_text,
-                    system_instruction=config["assistant"]["system_prompt"],
+            user_text = None
+
+            if manual_input_plugin:
+                user_text = await asyncio.to_thread(
+                    manual_input_plugin.check_for_keyboard_override
                 )
-                if reply:
-                    await voice.speak(reply)
+
+            if not user_text:
+                user_text = await asyncio.to_thread(
+                    audio_engine.listen_and_transcribe
+                )
+            else:
+                print(f"You (Typed): {user_text}")
+
+            if user_text:
+                await process_user_input(user_text)
+                if not SYSTEM_RUNNING:
+                    break
 
         await asyncio.sleep(0.1)
 
 
 if __name__ == "__main__":
     tray.start_background()
-
     try:
-        asyncio.run(voice_assistant_loop())
+        asyncio.run(main_loop())
     except KeyboardInterrupt:
         print("\nGoodbye.")
     sys.exit(0)
