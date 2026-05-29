@@ -13,6 +13,7 @@ env/
 # Generated at runtime
 response.mp3
 temp_input.wav
+temp_clean.wav
 temp_response.mp3
 *.mp3
 chat_history.txt

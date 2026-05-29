@@ -12,6 +12,10 @@ class AppLauncherPlugin:
 
     def execute(self, user_text, context=None):
         """Processes text. Returns a vocal response string if executed, else None."""
+        # Layer A passes context for memory injection only — don't launch twice.
+        if context is not None:
+            return None
+
         cleaned = user_text.lower()
         if "open" in cleaned or "launch" in cleaned:
             for app_name, command in self.app_map.items():
