@@ -12,8 +12,17 @@ env/
 
 # Generated at runtime
 response.mp3
+temp_input.wav
+temp_response.mp3
 *.mp3
 chat_history.txt
+
+# Large local assets (download separately)
+models/*.bin
+whisper_bin/*.exe
+whisper_bin/*.dll
+whisper-bin-x64.zip
+whisper_bin_pkg/
 
 # IDE / OS
 .vscode/

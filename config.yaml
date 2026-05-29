@@ -1,0 +1,17 @@
+assistant:
+  name: "Jarvis"
+  system_prompt: "You are Jarvis, a brilliant, helpful, and witty AI assistant. Keep responses brief (1-2 sentences)."
+
+llm:
+  model: "llama3.2:1b"
+  url: "http://localhost:11434/v1"
+
+tts:
+  voice: "en-US-BrianNeural"
+
+audio:
+  model_path: "models/ggml-tiny.en.bin"
+  bin_path: "whisper_bin/whisper-cli.exe"
+
+hotkeys:
+  toggle_listen: "ctrl+1"

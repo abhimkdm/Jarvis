@@ -1,175 +1,83 @@
 import asyncio
-import os
-import re
 import sys
-from datetime import datetime
 
-import edge_tts
-import pygame
-import speech_recognition as sr
-from openai import OpenAI
+import yaml
 
-# Ollama client
-client = OpenAI(
-    base_url="http://localhost:11434/v1",
-    api_key="ollama",
+from src.audio import OfflineAudioInput
+from src.llm import LLMManager
+from src.tts import TTSManager
+from src.tray import TrayManager
+
+with open("config.yaml", "r", encoding="utf-8") as f:
+    config = yaml.safe_load(f)
+
+brain = LLMManager(
+    base_url=config["llm"]["url"],
+    model=config["llm"]["model"],
+)
+voice = TTSManager(voice=config["tts"]["voice"])
+audio_input = OfflineAudioInput(
+    model_path=config["audio"]["model_path"],
+    bin_path=config["audio"]["bin_path"],
 )
 
-# Pygame mixer — no external media player windows on Windows
-pygame.mixer.init()
-recognizer = sr.Recognizer()
-recognizer.dynamic_energy_threshold = True
+SYSTEM_RUNNING = True
+SHOULD_LISTEN = False
 
-WAKE_PHRASE = "hey jarvis"
-CHAT_LOG_FILE = "chat_history.txt"
-TTS_VOICE = "en-US-BrianNeural"
-AUDIO_FILE = "response.mp3"
-EXIT_RE = re.compile(
-    r"\b(exit|quit|stop|goodbye|good\s*bye|bye|shutdown|shut\s*down)\b",
-    re.IGNORECASE,
+
+def handle_tray_toggle(listening_status):
+    global SHOULD_LISTEN
+    SHOULD_LISTEN = listening_status
+    print(f"[System UI: Listening Mode Changed -> {SHOULD_LISTEN}]")
+
+
+def handle_tray_exit():
+    global SYSTEM_RUNNING
+    SYSTEM_RUNNING = False
+    print("[System UI: Initiating shutdown]")
+
+
+tray = TrayManager(
+    toggle_callback=handle_tray_toggle,
+    exit_callback=handle_tray_exit,
+    hotkey=config["hotkeys"]["toggle_listen"],
 )
 
 
-def normalize(text: str) -> str:
-    return " ".join(text.lower().split())
-
-
-def contains_wake_word(text: str) -> bool:
-    return WAKE_PHRASE in normalize(text)
-
-
-def is_exit_command(text: str) -> bool:
-    return bool(EXIT_RE.search(normalize(text)))
-
-
-def extract_command(text: str) -> str:
-    match = re.search(r"hey\s+jarvis", text, flags=re.IGNORECASE)
-    if not match:
-        return ""
-    return text[match.end() :].strip(" ,.!?")
-
-
-def log_exchange(user_text: str, assistant_text: str) -> None:
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(CHAT_LOG_FILE, "a", encoding="utf-8") as log:
-        log.write(f"[{timestamp}]\n")
-        log.write(f"You: {user_text}\n")
-        log.write(f"Jarvis: {assistant_text}\n\n")
-
-
-async def speak(text: str) -> None:
-    """Convert text to speech and play in-process (no popup windows)."""
-    print(f"Jarvis: {text}")
-    communicate = edge_tts.Communicate(text, TTS_VOICE)
-    await communicate.save(AUDIO_FILE)
-
-    pygame.mixer.music.load(AUDIO_FILE)
-    pygame.mixer.music.play()
-    while pygame.mixer.music.get_busy():
-        await asyncio.sleep(0.1)
-
-    pygame.mixer.music.unload()
+async def voice_assistant_loop():
     try:
-        os.remove(AUDIO_FILE)
-    except OSError:
-        pass
-
-
-def listen(prompt: str = "\n[Jarvis is listening...]") -> str | None:
-    with sr.Microphone() as source:
-        print(prompt)
-        recognizer.adjust_for_ambient_noise(source, duration=0.8)
-        try:
-            audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
-        except sr.WaitTimeoutError:
-            return None
-
-    try:
-        print("[Thinking...]")
-        text = recognizer.recognize_google(audio).strip()
-        if text:
-            print(f"You: {text}")
-        return text or None
-    except sr.UnknownValueError:
-        return None
-    except sr.RequestError:
-        print("[System Error: Check network connection for speech recognition]")
-        return None
-
-
-def ask_llama(prompt: str) -> str:
-    try:
-        response = client.chat.completions.create(
-            model="llama3.2:1b",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are Jarvis, a brilliant, helpful, and witty AI assistant. "
-                        "Keep responses conversational, concise (1-3 sentences max), and sharp."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
+        audio_input.validate()
+    except FileNotFoundError as exc:
+        print(f"[Setup error]\n{exc}", file=sys.stderr)
+        await voice.speak(
+            "Setup incomplete. Whisper binary or model file is missing, sir."
         )
-        return response.choices[0].message.content.strip()
-    except Exception as exc:
-        return (
-            "I encountered an error connecting to my brain. "
-            f"Make sure Ollama is running. Error: {exc}"
-        )
+        return
 
+    await voice.speak(
+        "Systems initialized and running in your taskbar background, sir. "
+        "Press Control 1 to begin listening."
+    )
 
-async def wait_for_wake_word() -> tuple[str | None, bool]:
-    """Wait for 'Hey Jarvis', then return (command, should_exit)."""
-    while True:
-        heard = listen("\n[Waiting for 'Hey Jarvis'...]")
-        if not heard:
-            continue
-        if is_exit_command(heard):
-            return None, True
-        if not contains_wake_word(heard):
-            continue
+    while SYSTEM_RUNNING:
+        if SHOULD_LISTEN:
+            user_text = await asyncio.to_thread(audio_input.listen_and_transcribe)
+            if user_text:
+                reply = brain.generate_response(
+                    prompt=user_text,
+                    system_instruction=config["assistant"]["system_prompt"],
+                )
+                if reply:
+                    await voice.speak(reply)
 
-        command = extract_command(heard)
-        if command:
-            if is_exit_command(command):
-                return None, True
-            return command, False
-
-        follow_up = listen("\n[Yes, sir?]")
-        if follow_up and is_exit_command(follow_up):
-            return None, True
-        return follow_up, False
-
-
-async def main() -> None:
-    try:
-        with sr.Microphone():
-            pass
-    except OSError as exc:
-        print(f"No microphone available: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    await speak("Systems initialized. I am online and ready, sir. Say Hey Jarvis when you need me.")
-
-    while True:
-        user_input, should_exit = await wait_for_wake_word()
-        if should_exit:
-            await speak("Understood. Powering down systems. Goodbye.")
-            break
-        if not user_input:
-            await asyncio.sleep(0.1)
-            continue
-
-        reply = ask_llama(user_input)
-        log_exchange(user_input, reply)
-        await speak(reply)
         await asyncio.sleep(0.1)
 
 
 if __name__ == "__main__":
+    tray.start_background()
+
     try:
-        asyncio.run(main())
+        asyncio.run(voice_assistant_loop())
     except KeyboardInterrupt:
         print("\nGoodbye.")
+    sys.exit(0)

@@ -1,0 +1,15 @@
+# This file exists to maintain the directory structure in Git.
+# The actual binary files (.exe, .dll) should be downloaded separately.
+#
+# Recommended: download whisper-bin-x64.zip from
+# https://github.com/ggml-org/whisper.cpp/releases
+# and extract ALL files into this folder (not just whisper-cli.exe).
+#
+# Required files include:
+# - whisper-cli.exe
+# - whisper.dll
+# - ggml.dll, ggml-base.dll, ggml-cpu.dll
+# - SDL2.dll
+#
+# Optional / deprecated:
+# - main.exe (deprecated — use whisper-cli.exe)
