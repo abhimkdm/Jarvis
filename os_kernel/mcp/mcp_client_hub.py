@@ -29,10 +29,7 @@ class MCPClientHub:
     async def connect_servers(self):
         print("\n[Kernel OS: Accessing Official Model Context Protocol Subsystems...]")
         server_files = sorted(
-            set(
-                glob.glob(os.path.join(PROJECT_ROOT, "mcp_servers", "*_mcp.py"))
-                + glob.glob(os.path.join(PROJECT_ROOT, "mcp_servers", "*_server.py"))
-            )
+            glob.glob(os.path.join(PROJECT_ROOT, "mcp_servers", "*_server.py"))
         )
 
         if not server_files:

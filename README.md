@@ -27,7 +27,7 @@ flowchart LR
     Plugins --> Memory[chat_memory]
     Plugins --> Launcher[app_launcher]
     Kernel --> MCPHub[os_kernel/mcp/mcp_client_hub.py]
-    MCPHub --> MCPServers[mcp_servers/*_mcp.py]
+    MCPHub --> MCPServers[mcp_servers/*_server.py]
     MCPServers --> Agents[agents/]
     Kernel --> LLM[drivers/llm.py]
     LLM --> Ollama[Ollama API]
@@ -75,8 +75,8 @@ Jarvis/
 │   ├── tts.py                   # Edge TTS + pygame playback
 │   └── tray.py                  # System tray icon, menu, global hotkey
 ├── mcp_servers/                         # Official stdio MCP server scripts
-│   ├── notepad_mcp.py           # stage_note / confirm_and_open_notepad tools
-│   └── outlook_mcp.py           # stage_email / confirm_and_send_email tools
+│   ├── notepad_server.py        # stage_note / confirm_and_open_notepad tools
+│   └── outlook_server.py        # stage_email / confirm_and_send_email tools
 ├── agents/                      # Decoupled OS automation workers
 │   ├── notepad_agent.py         # Launches Notepad and types staged text
 │   └── outlook_agent.py         # Opens Outlook and composes staged email
@@ -181,7 +181,7 @@ Listening is **off by default**. Press **Ctrl+1** once, wait for the mic monitor
 
 ## MCP Client Hub
 
-The kernel acts as an **MCP client**. At boot, `MCPClientHub` scans `mcp_servers/` for `*_mcp.py` scripts, spawns each as a stdio sub-process, and aggregates their tool schemas into `tools_manifest`.
+The kernel acts as an **MCP client**. At boot, `MCPClientHub` scans `mcp_servers/` for `*_server.py` scripts, spawns each as a stdio sub-process, and aggregates their tool schemas into `tools_manifest`.
 
 When the LLM decides a tool is needed, it returns a structured call. The kernel executes it:
 
@@ -194,7 +194,7 @@ User speech → Ollama (with tools_manifest) → tool_call → mcp_hub.call_tool
 Add a new file to `mcp_servers/` using FastMCP:
 
 ```python
-# mcp_servers/my_feature_mcp.py
+# mcp_servers/my_feature_server.py
 from mcp.server.fastmcp import FastMCP
 from agents.my_feature_agent import MyFeatureAgent
 
@@ -311,7 +311,7 @@ Main engine: manages audio, voice, brain, plugins, MCP client hub, runtime tempe
 
 ### `os_kernel/mcp/mcp_client_hub.py` — `MCPClientHub`
 
-Discovers `mcp_servers/*_mcp.py` servers, spawns stdio sub-processes, aggregates tool manifests, and routes `call_tool()` requests.
+Discovers `mcp_servers/*_server.py` servers, spawns stdio sub-processes, aggregates tool manifests, and routes `call_tool()` requests.
 
 ### `os_kernel/plugin/plugin_registry.py` — `PluginRegistry`
 
@@ -361,7 +361,7 @@ Ensure each plugin folder has `__init__.py` exporting a `*Plugin` class.
 
 ### No MCP tools compiled at startup
 
-Ensure MCP server scripts live in `mcp_servers/` and are named `*_mcp.py`. Each must include `if __name__ == "__main__": server.run(transport="stdio")`.
+Ensure MCP server scripts live in `mcp_servers/` and are named `*_server.py`. Each must include `if __name__ == "__main__": server.run(transport="stdio")`.
 
 ### Tool call fails / no OS action
 
