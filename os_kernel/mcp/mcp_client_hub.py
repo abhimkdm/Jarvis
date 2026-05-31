@@ -2,9 +2,60 @@ import os
 import glob
 import asyncio
 import sys
+import traceback
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
+from os_kernel.logs.log_config import get_mcp_logger
+
+
+def _format_exception_detail(exc: BaseException) -> str:
+    """Expand TaskGroup / ExceptionGroup wrappers into readable sub-exception lines."""
+    lines: list[str] = []
+
+    def walk(err: BaseException, indent: int = 0) -> None:
+        pad = "  " * indent
+        lines.append(f"{pad}{type(err).__name__}: {err}")
+        if isinstance(err, BaseExceptionGroup):
+            for index, sub in enumerate(err.exceptions):
+                lines.append(f"{pad}  sub-exception [{index}]:")
+                walk(sub, indent + 2)
+            return
+        if err.__cause__ is not None:
+            lines.append(f"{pad}  caused by:")
+            walk(err.__cause__, indent + 1)
+        elif err.__context__ is not None and not err.__suppress_context__:
+            lines.append(f"{pad}  context:")
+            walk(err.__context__, indent + 1)
+
+    walk(exc)
+    lines.append("")
+    lines.extend(
+        traceback.format_exception(type(exc), exc, exc.__traceback__).rstrip().splitlines()
+    )
+    return "\n".join(lines)
+
+
+def _is_cancelled(exc: BaseException) -> bool:
+    if isinstance(exc, asyncio.CancelledError):
+        return True
+    if isinstance(exc, BaseExceptionGroup):
+        return bool(exc.exceptions) and all(
+            _is_cancelled(sub) for sub in exc.exceptions
+        )
+    return False
+
+
+def _log_mcp_failure(file_path: str, exc: BaseException) -> None:
+    server_label = os.path.basename(file_path)
+    stem = os.path.splitext(server_label)[0]
+    logger = get_mcp_logger(stem)
+    detail = _format_exception_detail(exc)
+    print(f" └─ [MCP ERROR] {server_label}:")
+    for line in detail.splitlines():
+        print(f"    {line}")
+    logger.error("MCP server session failed (%s):\n%s", server_label, detail)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -89,8 +140,8 @@ class MCPClientHub:
                     await self._shutdown_event.wait()
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            print(f" └─ [MCP ERROR] {os.path.basename(file_path)}: {exc}")
+        except BaseException as exc:
+            _log_mcp_failure(file_path, exc)
 
     async def shutdown(self):
         """Release MCP subprocess sessions before the event loop closes."""
@@ -98,7 +149,16 @@ class MCPClientHub:
         for task in self._server_tasks:
             task.cancel()
         if self._server_tasks:
-            await asyncio.gather(*self._server_tasks, return_exceptions=True)
+            results = await asyncio.gather(
+                *self._server_tasks, return_exceptions=True
+            )
+            for task, result in zip(self._server_tasks, results):
+                if isinstance(result, BaseException) and not _is_cancelled(result):
+                    server_file = task.get_name().removeprefix("mcp:")
+                    _log_mcp_failure(
+                        os.path.join(PROJECT_ROOT, "mcp_servers", server_file),
+                        result,
+                    )
         self._server_tasks.clear()
         self.sessions.clear()
 
