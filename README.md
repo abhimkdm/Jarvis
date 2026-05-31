@@ -1,4 +1,4 @@
-# Abhi-Voice (Jarvis)
+# Abhishek's Voice Assistant (Jarvis)
 
 A local voice assistant for Windows that runs entirely on your machine. It listens through your microphone, transcribes speech offline with **whisper.cpp**, routes commands through a **plugin registry**, reasons with **Ollama** (`llama3.2:1b`), and speaks back using **Edge TTS** — all controlled from the system tray.
 
@@ -42,7 +42,7 @@ flowchart LR
 ## Project Structure
 
 ```
-Abhi-Voice/
+Jarvis/
 ├── main.py                  # Entry point, plugin discovery, async loop
 ├── config.yaml              # Assistant, LLM, TTS, audio, and hotkey settings
 ├── requirements.txt
@@ -83,7 +83,7 @@ Abhi-Voice/
 ### 1. Clone and install Python dependencies
 
 ```powershell
-cd Abhi-Voice
+cd "Jarvis"
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
