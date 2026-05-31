@@ -1,11 +1,14 @@
 import audioop
 import os
 import subprocess
+import time
 import wave
 
 import numpy as np
 import speech_recognition as sr
 from scipy.signal import butter, lfilter
+
+from os_kernel.log_config import get_jarvis_logger
 
 WHISPER_CANDIDATES = (
     "whisper_bin/whisper-cli.exe",
@@ -48,8 +51,11 @@ class OfflineAudioInput:
         self.bin_path = bin_path
         self.temp_wav = temp_wav
         self.recognizer = sr.Recognizer()
+        self.recognizer.energy_threshold = 300
         self._resolved_bin: str | None = None
+        self._ambient_calibrated = False
         self.sample_rate = SAMPLE_RATE
+        self.log = get_jarvis_logger()
 
     def resolve_bin_path(self) -> str:
         """Pick the first available whisper.cpp CLI binary."""
@@ -189,23 +195,62 @@ class OfflineAudioInput:
             return True
         return False
 
-    def listen_and_transcribe(self) -> str | None:
-        with sr.Microphone() as source:
-            print("\n[Jarvis Core: Monitoring Mic Input...]")
+    def _capture_speech(self) -> sr.AudioData | None:
+        """Open the mic, optionally calibrate once, and capture one utterance."""
+        print("\n[Jarvis Core: Monitoring Mic Input...]")
 
-            # Layer 1: dynamic noise-floor calibration
-            self.recognizer.adjust_for_ambient_noise(source, duration=0.6)
-            self.recognizer.energy_threshold = max(
-                self.recognizer.energy_threshold, 300
-            )
-
+        for attempt in range(2):
+            source = sr.Microphone()
             try:
-                audio = self.recognizer.listen(
-                    source, timeout=4, phrase_time_limit=8
+                source.__enter__()
+
+                if not self._ambient_calibrated:
+                    try:
+                        self.recognizer.adjust_for_ambient_noise(
+                            source, duration=0.6
+                        )
+                        self.recognizer.energy_threshold = max(
+                            self.recognizer.energy_threshold, 300
+                        )
+                    except OSError as exc:
+                        print(
+                            f"[Mic calibration skipped: {exc}. "
+                            "Using default threshold.]"
+                        )
+                    self._ambient_calibrated = True
+
+                try:
+                    return self.recognizer.listen(
+                        source, timeout=4, phrase_time_limit=8
+                    )
+                except sr.WaitTimeoutError:
+                    print("[No speech detected — timed out waiting.]")
+                    return None
+            except OSError as exc:
+                if attempt == 0:
+                    print(
+                        f"[Microphone busy ({exc}). "
+                        "Retrying in a moment...]"
+                    )
+                    time.sleep(0.4)
+                    continue
+                self.log.error(
+                    "Microphone error after retry: %s", exc, exc_info=True
                 )
-            except sr.WaitTimeoutError:
-                print("[No speech detected — timed out waiting.]")
+                print(f"[Microphone error: {exc}. Skipping this cycle.]")
                 return None
+            finally:
+                try:
+                    source.__exit__(None, None, None)
+                except OSError:
+                    pass
+
+        return None
+
+    def listen_and_transcribe(self) -> str | None:
+        audio = self._capture_speech()
+        if audio is None:
+            return None
 
         try:
             bin_path = self.resolve_bin_path()
@@ -239,6 +284,7 @@ class OfflineAudioInput:
                     result.stderr,
                     result.stdout,
                 )
+                self.log.error("Whisper error: %s", err)
                 print(f"[Whisper error: {err}]")
                 return None
 
@@ -254,9 +300,11 @@ class OfflineAudioInput:
             return None
 
         except FileNotFoundError as exc:
+            self.log.error("Whisper setup error: %s", exc, exc_info=True)
             print(f"[Whisper setup error: {exc}]")
             return None
         except OSError as exc:
+            self.log.error("Audio file error: %s", exc, exc_info=True)
             print(f"[Audio file error: {exc}]")
             return None
         finally:

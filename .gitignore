@@ -17,6 +17,8 @@ temp_clean.wav
 temp_response.mp3
 *.mp3
 chat_history.txt
+logs/**/*.log
+logs/**/*.log.*
 
 # Large local assets (download separately)
 models/*.bin
