@@ -23,10 +23,7 @@ class JarvisKernel:
         self.running = True
         self.should_listen = False
 
-        self.brain = LLMManager(
-            base_url=self.config["llm"]["url"],
-            model=self.config["llm"]["model"],
-        )
+        self.brain = LLMManager(model=self.config["llm"]["model"])
         self.voice = TTSManager(voice=self.config["tts"]["voice"])
 
         self.plugins = PluginRegistry()
@@ -190,25 +187,28 @@ class JarvisKernel:
 
         manual_input = self.plugins.manual_input
 
-        while self.running:
-            if self.should_listen:
-                user_text = None
+        try:
+            while self.running:
+                if self.should_listen:
+                    user_text = None
 
-                if manual_input:
-                    user_text = await asyncio.to_thread(
-                        manual_input.check_for_keyboard_override
-                    )
+                    if manual_input:
+                        user_text = await asyncio.to_thread(
+                            manual_input.check_for_keyboard_override
+                        )
 
-                if not user_text:
-                    user_text = await asyncio.to_thread(
-                        audio_engine.listen_and_transcribe
-                    )
-                else:
-                    print(f"You (Typed): {user_text}")
+                    if not user_text:
+                        user_text = await asyncio.to_thread(
+                            audio_engine.listen_and_transcribe
+                        )
+                    else:
+                        print(f"You (Typed): {user_text}")
 
-                if user_text:
-                    await self.process_user_input(user_text)
-                    if not self.running:
-                        break
+                    if user_text:
+                        await self.process_user_input(user_text)
+                        if not self.running:
+                            break
 
-            await asyncio.sleep(0.1)
+                await asyncio.sleep(0.1)
+        finally:
+            await self.mcp_hub.shutdown()
