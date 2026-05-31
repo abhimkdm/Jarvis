@@ -10,6 +10,20 @@ from mcp.client.stdio import stdio_client
 from os_kernel.logs.log_config import get_mcp_logger
 
 
+def _format_traceback_lines(exc: BaseException | None) -> list[str]:
+    """
+    Safely flattens an exception traceback context into a list of
+    strings for clean log dumping.
+    """
+    if not exc:
+        return []
+
+    raw_traceback_str = "".join(
+        traceback.format_exception(type(exc), exc, exc.__traceback__)
+    )
+    return raw_traceback_str.rstrip().splitlines()
+
+
 def _format_exception_detail(exc: BaseException) -> str:
     """Expand TaskGroup / ExceptionGroup wrappers into readable sub-exception lines."""
     lines: list[str] = []
@@ -31,9 +45,7 @@ def _format_exception_detail(exc: BaseException) -> str:
 
     walk(exc)
     lines.append("")
-    lines.extend(
-        traceback.format_exception(type(exc), exc, exc.__traceback__).rstrip().splitlines()
-    )
+    lines.extend(_format_traceback_lines(exc))
     return "\n".join(lines)
 
 
@@ -129,13 +141,19 @@ class MCPClientHub:
                     self.sessions.append(session)
 
                     response = await session.list_tools()
+                    print(
+                        f"    ├─ Active Session Established! "
+                        f"Registering {len(response.tools)} tools."
+                    )
                     for tool in response.tools:
                         self.tools_manifest.append({
                             "name": tool.name,
                             "description": tool.description,
-                            "input_schema": tool.input_schema
+                            "inputSchema": tool.inputSchema,
                         })
-                        print(f"    ├── Standard Tool Compiled: [{tool.name}]")
+                        print(
+                            f"    ├── Standard Tool Compiled & Registered: [{tool.name}]"
+                        )
 
                     await self._shutdown_event.wait()
         except asyncio.CancelledError:
