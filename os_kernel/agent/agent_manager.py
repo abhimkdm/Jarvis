@@ -1,4 +1,4 @@
-from os_kernel.log_config import get_agent_logger
+from os_kernel.logs.log_config import get_agent_logger
 
 
 class AgentManager:

@@ -2,7 +2,7 @@ import asyncio
 import sys
 
 from os_kernel import JarvisKernel
-from os_kernel.log_config import get_jarvis_logger, install_global_exception_hook
+from os_kernel.logs.log_config import get_jarvis_logger, install_global_exception_hook
 
 
 def main() -> None:

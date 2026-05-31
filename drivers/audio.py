@@ -8,7 +8,7 @@ import numpy as np
 import speech_recognition as sr
 from scipy.signal import butter, lfilter
 
-from os_kernel.log_config import get_jarvis_logger
+from os_kernel.logs.log_config import get_jarvis_logger
 
 WHISPER_CANDIDATES = (
     "whisper_bin/whisper-cli.exe",

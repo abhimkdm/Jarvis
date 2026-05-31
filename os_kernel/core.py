@@ -4,9 +4,10 @@ import sys
 
 import yaml
 
-from os_kernel.log_config import get_jarvis_logger
-from os_kernel.mcp_server import MCPServer
-from os_kernel.plugin_registry import PluginRegistry
+from os_kernel.logs.log_config import get_jarvis_logger
+from os_kernel.mcp.mcp_client_hub import MCPClientHub
+from os_kernel.plugin.plugin_registry import PluginRegistry
+from os_kernel.temperature.system_states import SystemStateEngine
 from drivers.audio import OfflineAudioInput
 from drivers.llm import LLMManager
 from drivers.tts import TTSManager
@@ -29,11 +30,11 @@ class JarvisKernel:
         self.voice = TTSManager(voice=self.config["tts"]["voice"])
 
         self.plugins = PluginRegistry()
-        self.mcp = MCPServer()
+        self.mcp_hub = MCPClientHub()
+        self.state_engine = SystemStateEngine()
         self.active_capabilities_prompt = ""
 
         self.plugins.discover()
-        self.active_capabilities_prompt = self._generate_skills_manifest()
 
         self.tray = TrayManager(
             toggle_callback=self._on_tray_toggle,
@@ -56,7 +57,7 @@ class JarvisKernel:
 
     def _read_skills_handbook(self) -> str:
         """Reads the custom skills profile directly from disk."""
-        skills_path = os.path.join(os.path.dirname(__file__), "skills.md")
+        skills_path = os.path.join(os.path.dirname(__file__), "skills", "skills.md")
         if os.path.exists(skills_path):
             with open(skills_path, "r", encoding="utf-8") as f:
                 return f.read().strip()
@@ -70,13 +71,10 @@ class JarvisKernel:
             "\n=== ACTIVE SYSTEM CAPABILITIES (YOU CAN ONLY DO THESE REMOTELY) ===\n"
         )
 
-        manifest += "Direct OS Automation Tools (Trigger words):\n"
-        for protocol in self.mcp.protocols:
-            trigger = protocol.trigger_phrase
-            agent = protocol.target_agent
-            manifest += (
-                f" - '{trigger}' (Routes to {agent} agent for application automation)\n"
-            )
+        manifest += "Official MCP Tools (LLM function-calling):\n"
+        for tool in self.mcp_hub.tools_manifest:
+            description = tool.get("description") or "No description provided."
+            manifest += f" - {tool['name']}: {description}\n"
 
         manifest += "Background Extensions and Features:\n"
         for plugin in self.plugins.plugins:
@@ -98,6 +96,22 @@ class JarvisKernel:
             )
         )
 
+    def _evaluate_runtime_config(self, user_text: str) -> dict:
+        """Dynamic parameter calculator — scales LLM temperature from intent and MCP state."""
+        mcp_active = any(
+            getattr(session, "awaiting_confirmation", False)
+            for session in self.mcp_hub.sessions
+        )
+        runtime_config = self.state_engine.evaluate_runtime_parameters(
+            user_text,
+            is_mcp_awaiting=mcp_active,
+        )
+        print(
+            f"[Kernel State Matrix: Shifting to {runtime_config['description']} "
+            f"(Temp: {runtime_config['temperature']})]"
+        )
+        return runtime_config
+
     async def process_user_input(self, user_text: str) -> None:
         try:
             if "exit" in user_text.lower() or "shutdown" in user_text.lower():
@@ -118,20 +132,28 @@ class JarvisKernel:
                 await self.voice.speak(command_reply)
                 return
 
-            command_reply = self.mcp.route_and_parse(user_text)
-            if command_reply:
-                await self.voice.speak(command_reply)
+            runtime_config = self._evaluate_runtime_config(user_text)
+            target_temp = runtime_config["temperature"]
+
+            ai_response = self.brain.generate_tool_aware_response(
+                user_text,
+                self.mcp_hub.tools_manifest,
+                temperature=target_temp,
+            )
+
+            if ai_response.tool_calls:
+                for call in ai_response.tool_calls:
+                    execution_reply = await self.mcp_hub.call_tool(
+                        call.name, call.arguments
+                    )
+                    await self.voice.speak(execution_reply)
+
+                memory = self.plugins.memory
+                if memory:
+                    memory.update_memory(user_text, execution_reply)
                 return
 
-            base_system_prompt = self.config["assistant"]["system_prompt"]
-            complete_system_instructions = (
-                base_system_prompt + self.active_capabilities_prompt
-            )
-            payload = [{"role": "system", "content": complete_system_instructions}]
-            payload.extend(llm_context["messages"])
-            payload.append({"role": "user", "content": user_text})
-
-            reply = self.brain.generate_response(payload)
+            reply = ai_response.text
 
             memory = self.plugins.memory
             if memory:
@@ -157,11 +179,13 @@ class JarvisKernel:
             )
             return
 
+        await self.mcp_hub.connect_servers()
+        self.active_capabilities_prompt = self._generate_skills_manifest()
         print(self.active_capabilities_prompt)
 
         await self.voice.speak(
-            "Systems online. Microkernel initialized. Keyboard override active. "
-            "Press Control 1 to begin listening."
+            "Kernel loaded with dynamic runtime tuning, sir. "
+            "Keyboard override active. Press Control 1 to begin listening."
         )
 
         manual_input = self.plugins.manual_input
