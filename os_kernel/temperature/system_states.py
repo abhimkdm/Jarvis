@@ -5,7 +5,7 @@ class SystemStateEngine:
         # Explicit intent keywords mapped to your architectural tasks
         self.code_keywords = ["write code", "python", "script", "bug", "debug", "function", "program"]
         self.creative_keywords = ["story", "poem", "joke", "creative", "imagine", "write a song"]
-        self.mcp_triggers = ["notepad", "email", "mail", "send", "write in", "outlook"]
+        self.mcp_triggers = ["email", "mail", "send", "outlook"]
 
     def evaluate_runtime_parameters(self, user_text, is_mcp_awaiting=False):
         """

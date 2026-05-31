@@ -7,7 +7,7 @@ A local voice assistant for Windows that runs entirely on your machine. It liste
 - **Offline speech-to-text** via whisper.cpp (no cloud STT, no ffmpeg required)
 - **Local LLM** via Ollama with a configurable system prompt and tool-calling support
 - **MCP client hub** — auto-discovers and spawns stdio MCP servers from `mcp_servers/`
-- **Agent workers** — decoupled OS automation tasks (Notepad, Outlook, etc.) in `agents/`
+- **Agent workers** — decoupled OS automation tasks (Outlook, etc.) in `agents/`
 - **Plugin registry** — auto-discovers feature plugins from `plugins/`
 - **Short-term chat memory** — rolling conversation context via `ChatMemoryPlugin`
 - **App launcher** — open Windows apps by voice via `AppLauncherPlugin`
@@ -75,10 +75,8 @@ Jarvis/
 │   ├── tts.py                   # Edge TTS + pygame playback
 │   └── tray.py                  # System tray icon, menu, global hotkey
 ├── mcp_servers/                         # Official stdio MCP server scripts
-│   ├── notepad_server.py        # stage_note / confirm_and_open_notepad tools
 │   └── outlook_server.py        # stage_email / confirm_and_send_email tools
 ├── agents/                      # Decoupled OS automation workers
-│   ├── notepad_agent.py         # Launches Notepad and types staged text
 │   └── outlook_agent.py         # Opens Outlook and composes staged email
 ├── plugins/                     # Feature plugin registry
 │   ├── app_launcher/
@@ -173,7 +171,6 @@ On startup the kernel spawns all MCP servers in `mcp_servers/`, pulls their tool
 | **Exit** | Tray → *Exit Jarvis*, say "exit"/"shutdown", or **Ctrl+C** |
 | **Type instead of speak** | Press **T** during the 2-second listen window |
 | **Open an app** | "Open notepad" / "Launch chrome" (via `AppLauncherPlugin`) |
-| **Write a note** | "Write a note saying …" — LLM calls `stage_note`, then confirm to execute |
 | **Draft an email** | "Email Sarah about the meeting" — LLM calls `stage_email`, then confirm to send |
 | **Multi-turn chat** | Ask a question, then a follow-up — memory plugin keeps context |
 

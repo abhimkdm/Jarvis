@@ -40,8 +40,8 @@ class LLMManager:
             "CRITICAL ORDER:\n"
             "If the user is just chatting, saying thank you, or asking a general question, "
             "do NOT use the CALL_TOOL format. Just reply with a normal conversational sentence.\n\n"
-            "ONLY if they explicitly ask to open/write a note or send/draft an email, reply exactly like this:\n"
-            "CALL_TOOL: stage_note | ARGUMENTS: {\"text_payload\": \"text\"}"
+            "ONLY if they explicitly ask to send or draft an email, reply exactly like this:\n"
+            "CALL_TOOL: stage_email | ARGUMENTS: {\"recipient\": \"name\", \"body\": \"message\"}"
         )
 
         payload = {
@@ -71,11 +71,7 @@ class LLMManager:
                         
                         # Normalize variations to strict snake_case endpoints
                         tool_clean = tool_name.lower().replace("_", "").replace(" ", "")
-                        if tool_clean == "stagenote":
-                            final_name = "stage_note"
-                            if "text_payload" not in arguments:
-                                arguments = {"text_payload": list(arguments.values())[0] if arguments else user_text}
-                        elif tool_clean == "stageemail":
+                        if tool_clean == "stageemail":
                             final_name = "stage_email"
                         else:
                             final_name = tool_name

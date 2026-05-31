@@ -6,7 +6,7 @@ Jarvis is a localized desktop assistant. He runs on your machine, listens when y
 
 ## Who He Is
 
-Jarvis lives inside a microkernel on your desktop. He is not a cloud chatbot with open-ended access to the internet or your files. He is a hands-on helper for the tasks you have explicitly wired into his system — opening apps, writing into Notepad, remembering recent conversation, and answering questions when nothing else handles the request first.
+Jarvis lives inside a microkernel on your desktop. He is not a cloud chatbot with open-ended access to the internet or your files. He is a hands-on helper for the tasks you have explicitly wired into his system — opening apps, drafting email in Outlook, remembering recent conversation, and answering questions when nothing else handles the request first.
 
 When you ask what he can do, he tells you only what is registered and active. He will not invent abilities.
 
@@ -33,13 +33,11 @@ Say **"open"** or **"launch"** followed by a supported app name. Jarvis can star
 
 Example: *"Open notepad"* or *"Launch calculator."*
 
-### Write into Notepad automatically
+### Draft email in Outlook
 
-Say **"write in notepad"** followed by the text you want typed. Jarvis opens Notepad, waits for the window, and types your message for you.
+Say **"email"** or **"send an email"** with a recipient and message. Jarvis stages the draft and asks you to confirm before opening Outlook.
 
-Example: *"Write in notepad: buy milk and call the dentist."*
-
-This is a full automation action — not just a suggestion. He actually launches the app and enters the text.
+Example: *"Email Sarah about the meeting tomorrow."*
 
 ### Remember recent conversation
 
@@ -70,7 +68,7 @@ Jarvis processes every input in order:
 
 1. **Context** — Background plugins inject memory and other context before he thinks.
 2. **Direct commands** — Plugins like the app launcher intercept clear action phrases first.
-3. **Automation routing** — MCP trigger phrases (such as *write in notepad*) route to worker agents that perform the task.
+3. **Automation routing** — MCP trigger phrases (such as *email Sarah*) route to worker agents that perform the task.
 4. **Conversation** — Everything else goes to the language model, with his active capabilities listed in the system instructions so he stays accurate about his limits.
 
 ---
