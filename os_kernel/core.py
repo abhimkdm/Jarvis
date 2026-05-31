@@ -29,7 +29,6 @@ class JarvisKernel:
         self.plugins = PluginRegistry()
         self.mcp_hub = MCPClientHub()
         self.state_engine = SystemStateEngine()
-        self.active_capabilities_prompt = ""
 
         self.plugins.discover()
 
@@ -59,27 +58,6 @@ class JarvisKernel:
             with open(skills_path, "r", encoding="utf-8") as f:
                 return f.read().strip()
         return "I am a local microkernel assistant. My skills registry file is empty."
-
-    def _generate_skills_manifest(self) -> str:
-        """Inspect registries and create a strict capability list for the LLM."""
-        manifest = f"\n\n{self._read_skills_handbook()}\n"
-
-        manifest += (
-            "\n=== ACTIVE SYSTEM CAPABILITIES (YOU CAN ONLY DO THESE REMOTELY) ===\n"
-        )
-
-        manifest += "Official MCP Tools (LLM function-calling):\n"
-        for tool in self.mcp_hub.tools_manifest:
-            description = tool.get("description") or "No description provided."
-            manifest += f" - {tool['name']}: {description}\n"
-
-        manifest += "Background Extensions and Features:\n"
-        for plugin in self.plugins.plugins:
-            plugin_name = plugin.__class__.__name__
-            manifest += f" - {plugin_name} (Active in memory context loop)\n"
-
-        manifest += "=================================================================\n"
-        return manifest
 
     @staticmethod
     def _is_skills_inquiry(user_text: str) -> bool:
@@ -182,8 +160,6 @@ class JarvisKernel:
             return
 
         await self.mcp_hub.connect_servers()
-        self.active_capabilities_prompt = self._generate_skills_manifest()
-        print(self.active_capabilities_prompt)
 
         await self.voice.speak(
             "Kernel loaded with dynamic runtime tuning, sir. "

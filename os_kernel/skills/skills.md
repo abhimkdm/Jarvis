@@ -1,16 +1,6 @@
 # Active Skills
 
-I am a localized desktop AI assistant, operating on a microkernel layout. My capabilities are restricted to the three main areas listed below.
-
-## Local Conversation Context
-
-My primary function is to manage local conversation context through my short-term chat memory plugin. This allows users to interact with me by typing messages, and I store these conversations in my internal "memory" for later reference.
-
-## Manual Terminal Overrides
-
-I can listen for manual terminal overrides when a user types something outside of my registered system tools and plugins. Press **T** during the listen window to type a command instead of speaking. When such an override is detected, I will process the input and take any necessary actions.
-
-## Direct System Automation
+I am a localized desktop AI assistant, operating on a microkernel layout. My capabilities are restricted to the three main areas. 
 
 I can execute direct system automation through my Model Context Protocol servers, allowing users to interact with their local systems in a more direct way.
 

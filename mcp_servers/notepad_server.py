@@ -1,8 +1,14 @@
+import os
+import sys
+
+# ─── SYS PATH PATCH: Forces the background subprocess to see your root workspace ───
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import asyncio
 from mcp.server.fastmcp import FastMCP
 from agents.notepad_agent import NotepadAgent
 
-server = FastMCP("Notepad-Text-Server")
+server = FastMCP("Notepad-Server")
 worker = NotepadAgent()
 pending_state = {}
 
