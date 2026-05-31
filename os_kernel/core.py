@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 
 import yaml
@@ -29,8 +30,10 @@ class JarvisKernel:
 
         self.plugins = PluginRegistry()
         self.mcp = MCPServer()
+        self.active_capabilities_prompt = ""
 
         self.plugins.discover()
+        self.active_capabilities_prompt = self._generate_skills_manifest()
 
         self.tray = TrayManager(
             toggle_callback=self._on_tray_toggle,
@@ -51,11 +54,60 @@ class JarvisKernel:
         self.running = False
         print("[Kernel UI: Initiating shutdown]")
 
+    def _read_skills_handbook(self) -> str:
+        """Reads the custom skills profile directly from disk."""
+        skills_path = os.path.join(os.path.dirname(__file__), "skills.md")
+        if os.path.exists(skills_path):
+            with open(skills_path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        return "I am a local microkernel assistant. My skills registry file is empty."
+
+    def _generate_skills_manifest(self) -> str:
+        """Inspect registries and create a strict capability list for the LLM."""
+        manifest = f"\n\n{self._read_skills_handbook()}\n"
+
+        manifest += (
+            "\n=== ACTIVE SYSTEM CAPABILITIES (YOU CAN ONLY DO THESE REMOTELY) ===\n"
+        )
+
+        manifest += "Direct OS Automation Tools (Trigger words):\n"
+        for protocol in self.mcp.protocols:
+            trigger = protocol.trigger_phrase
+            agent = protocol.target_agent
+            manifest += (
+                f" - '{trigger}' (Routes to {agent} agent for application automation)\n"
+            )
+
+        manifest += "Background Extensions and Features:\n"
+        for plugin in self.plugins.plugins:
+            plugin_name = plugin.__class__.__name__
+            manifest += f" - {plugin_name} (Active in memory context loop)\n"
+
+        manifest += "=================================================================\n"
+        return manifest
+
+    @staticmethod
+    def _is_skills_inquiry(user_text: str) -> bool:
+        cleaned = user_text.lower()
+        return any(
+            phrase in cleaned
+            for phrase in (
+                "what can you do",
+                "what are your skills",
+                "what all you can do",
+            )
+        )
+
     async def process_user_input(self, user_text: str) -> None:
         try:
             if "exit" in user_text.lower() or "shutdown" in user_text.lower():
                 self.running = False
                 await self.voice.speak("Powering down.")
+                return
+
+            if self._is_skills_inquiry(user_text):
+                handbook_text = self._read_skills_handbook()
+                await self.voice.speak(handbook_text)
                 return
 
             llm_context = {"messages": []}
@@ -71,9 +123,11 @@ class JarvisKernel:
                 await self.voice.speak(command_reply)
                 return
 
-            payload = [
-                {"role": "system", "content": self.config["assistant"]["system_prompt"]}
-            ]
+            base_system_prompt = self.config["assistant"]["system_prompt"]
+            complete_system_instructions = (
+                base_system_prompt + self.active_capabilities_prompt
+            )
+            payload = [{"role": "system", "content": complete_system_instructions}]
             payload.extend(llm_context["messages"])
             payload.append({"role": "user", "content": user_text})
 
@@ -102,6 +156,8 @@ class JarvisKernel:
                 "Setup incomplete. Whisper binary or model file is missing, sir."
             )
             return
+
+        print(self.active_capabilities_prompt)
 
         await self.voice.speak(
             "Systems online. Microkernel initialized. Keyboard override active. "
