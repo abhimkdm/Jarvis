@@ -160,6 +160,11 @@ class JarvisKernel:
         except Exception:
             self.log.exception("Failed to process user input")
 
+    async def boot_up(self) -> None:
+        """Start tray UI and enter the main listen/process loop."""
+        self.tray.start_background()
+        await self.run()
+
     async def run(self) -> None:
         audio_engine = OfflineAudioInput(
             model_path=self.config["audio"]["model_path"],

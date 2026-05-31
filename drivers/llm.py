@@ -6,26 +6,11 @@ class LLMManager:
     def __init__(self, model="llama3.2:1b"):
         self.model = model.lower().strip()
         self.api_url = "http://localhost:11434/api/chat"
-        
-        # Define arrays to categorize model classes
-        self.frontier_models = ["gpt", "sonnet", "opus", "gemini", "kemi", "claude"]
 
-    def _determine_execution_temperature(self, kernel_temperature):
+    def generate_tool_aware_response(self, user_text, tools, temperature=0.0):
         """
-        Safety Guard: Forces temperature 0 for small local models to eliminate 
-        tool hallucinations, while preserving dynamic shifts for large frontier models.
-        """
-        # If the active model name matches any large cloud model keywords, trust the kernel state
-        # if any(large_model in self.model for large_model in self.frontier_models):
-            # return kernel_temperature
-            
-        # Fallback: Hard override for small/local configurations (like llama, qwen, phi)
-        return 0.0
-
-    def generate_tool_aware_response(self, user_text, tools, temperature=0.7):
-        """
-        Optimized tool router that auto-scales temperature settings based on 
-        model scale classification.
+        Streamlined tool router optimized for maximum determinism.
+        Forces temperature 0.0 globally for all conversation threads.
         """
         cleaned_input = user_text.lower().strip()
 
@@ -40,15 +25,12 @@ class LLMManager:
                 self.text = text
                 self.tool_calls = tool_calls or []
 
-        # ─── 1. GREETING INTERCEPTOR ───
+        # 1. GREETING INTERCEPTOR
         greetings = ["hey jarvis", "good morning", "hello", "hi jarvis", "how are you", "good evening"]
         if any(g == cleaned_input or cleaned_input.startswith(g + " ") for g in greetings):
             return AIResponse(text="Good morning, sir. I am fully operational and monitoring system states. How can I assist you today?")
 
-        # ─── 2. CALCULATE ADAPTIVE TEMPERATURE ───
-        runtime_temperature = self._determine_execution_temperature(temperature)
-        
-        # ─── 3. BUILD SCHEMAS AND GUIDANCE ───
+        # 2. BUILD SCHEMAS AND GUIDANCE (Enforcing absolute temperature 0.0)
         tools_description = ""
         for tool in tools:
             tools_description += f"- {tool['name']}: {tool['description']}\n"
@@ -69,7 +51,7 @@ class LLMManager:
                 {"role": "user", "content": user_text}
             ],
             "options": {
-                "temperature": runtime_temperature  # <-- Adaptive execution applied
+                "temperature": 0.0  # <-- Locked down globally
             },
             "stream": False
         }
@@ -78,7 +60,7 @@ class LLMManager:
             response = requests.post(self.api_url, json=payload)
             response_text = response.json().get("message", {}).get("content", "").strip()
 
-            # ─── 4. REGEX ROUTING VALIDATION LAYER ───
+            # 3. REGEX ROUTING VALIDATION LAYER
             if "CALL_TOOL:" in response_text:
                 match = re.search(r"CALL_TOOL:\s*(\w+)\s*\|\s*ARGUMENTS:\s*(\{.*\}).*", response_text, re.DOTALL)
                 if match:
