@@ -1,14 +1,21 @@
-import subprocess
+import importlib
+import pkgutil
+
 
 class AppLauncherPlugin:
     def __init__(self):
-        self.app_map = {
-            "chrome": "start chrome",
-            "browser": "start chrome",
-            "notepad": "notepad.exe",
-            "calculator": "calc.exe",
-            "explorer": "explorer.exe",
-        }
+        self.commands = self._load_commands()
+
+    @staticmethod
+    def _load_commands():
+        import plugins.app_launcher.commands as commands_pkg
+
+        loaded = []
+        for _, module_name, _ in pkgutil.iter_modules(commands_pkg.__path__):
+            mod = importlib.import_module(f"plugins.app_launcher.commands.{module_name}")
+            if hasattr(mod, "MATCH") and hasattr(mod, "exec_command"):
+                loaded.append(mod)
+        return loaded
 
     def execute(self, user_text, context=None):
         """Processes text. Returns a vocal response string if executed, else None."""
@@ -17,9 +24,7 @@ class AppLauncherPlugin:
             return None
 
         cleaned = user_text.lower()
-        if "open" in cleaned or "launch" in cleaned:
-            for app_name, command in self.app_map.items():
-                if app_name in cleaned:
-                    subprocess.Popen(command, shell=True)
-                    return f"Opening {app_name} right away, sir."
+        for command in self.commands:
+            if any(phrase in cleaned for phrase in command.MATCH):
+                return command.exec_command()
         return None
