@@ -78,6 +78,13 @@ class MCPClientHub:
         self.tools_manifest = []
         self._server_tasks = []
         self._shutdown_event = asyncio.Event()
+        self.server_status: dict[str, dict] = {}
+
+    @staticmethod
+    def discover_server_files() -> list[str]:
+        return sorted(
+            glob.glob(os.path.join(PROJECT_ROOT, "mcp_servers", "*_server.py"))
+        )
 
     def _server_env(self):
         env = os.environ.copy()
@@ -90,18 +97,18 @@ class MCPClientHub:
         return env
 
     async def connect_servers(self):
-        print("\n[Kernel OS: Accessing Official Model Context Protocol Subsystems...]")
-        server_files = sorted(
-            glob.glob(os.path.join(PROJECT_ROOT, "mcp_servers", "*_server.py"))
-        )
+        server_files = self.discover_server_files()
 
         if not server_files:
-            print(" └─ [CRITICAL WARNING]: No server scripts discovered in mcp_servers/")
+            get_mcp_logger("hub").warning(
+                "No server scripts discovered in mcp_servers/"
+            )
             return
 
         tasks = []
         for file_path in server_files:
-            print(f" └─ Spawning Standard Protocol Stream for: {file_path}")
+            server_label = os.path.basename(file_path)
+            self.server_status[server_label] = {"status": "CONNECTING", "latency_ms": None}
             server_params = StdioServerParameters(
                 command=sys.executable,
                 args=[file_path],
@@ -122,18 +129,9 @@ class MCPClientHub:
             await asyncio.sleep(0.5)
             retries += 1
 
-        failed = len(server_files) - len(self.sessions)
-        if failed:
-            print(
-                f" └─ [WARNING]: {failed} MCP server(s) failed to mount. "
-                "Check logs/ and ensure dependencies (e.g. pywin32) are installed."
-            )
-
-        print(
-            f"[Kernel OS: All {len(self.sessions)} active protocol tunnels securely mounted.]\n"
-        )
-
     async def _manage_server_session(self, file_path, params):
+        server_label = os.path.basename(file_path)
+        started_at = asyncio.get_running_loop().time()
         try:
             async with stdio_client(params) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
@@ -141,24 +139,24 @@ class MCPClientHub:
                     self.sessions.append(session)
 
                     response = await session.list_tools()
-                    print(
-                        f"    ├─ Active Session Established! "
-                        f"Registering {len(response.tools)} tools."
-                    )
+                    latency_ms = (asyncio.get_running_loop().time() - started_at) * 1000
+                    self.server_status[server_label] = {
+                        "status": "CONNECTED",
+                        "latency_ms": latency_ms,
+                        "tool_count": len(response.tools),
+                    }
                     for tool in response.tools:
                         self.tools_manifest.append({
                             "name": tool.name,
                             "description": tool.description,
                             "inputSchema": tool.inputSchema,
                         })
-                        print(
-                            f"    ├── Standard Tool Compiled & Registered: [{tool.name}]"
-                        )
 
                     await self._shutdown_event.wait()
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
+            self.server_status[server_label] = {"status": "FAILED", "latency_ms": None}
             _log_mcp_failure(file_path, exc)
 
     async def shutdown(self):
@@ -179,6 +177,7 @@ class MCPClientHub:
                     )
         self._server_tasks.clear()
         self.sessions.clear()
+        self.server_status.clear()
 
     async def call_tool(self, tool_name, arguments):
         """Sends a JSON-RPC execution request with loose string tolerance."""

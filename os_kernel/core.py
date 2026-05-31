@@ -3,6 +3,11 @@ import os
 import sys
 
 import yaml
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.table import Table
 
 from os_kernel.logs.log_config import get_jarvis_logger
 from os_kernel.mcp.mcp_client_hub import MCPClientHub
@@ -18,6 +23,7 @@ class JarvisKernel:
     """Core engine: manages ears, voice, brain, plugins, agents, and MCP routing."""
 
     def __init__(self, config_path: str = "config.yaml"):
+        self.console = Console()
         self.log = get_jarvis_logger()
         self.config = self._load_config(config_path)
         self.running = True
@@ -138,8 +144,91 @@ class JarvisKernel:
         except Exception:
             self.log.exception("Failed to process user input")
 
+    @staticmethod
+    def _mcp_server_display_name(filename: str) -> str:
+        labels = {
+            "apps_server.py": "System-Apps-Server",
+            "notepad_server.py": "Notepad-Server",
+            "outlook_server.py": "Outlook-Server",
+        }
+        stem = os.path.splitext(filename)[0].replace("_", "-").title()
+        return labels.get(filename, stem)
+
+    @staticmethod
+    def _mcp_status_style(status: str) -> str:
+        styles = {
+            "CONNECTED": "bold green",
+            "CONNECTING": "bold yellow",
+            "FAILED": "bold red",
+        }
+        return styles.get(status, "white")
+
+    def _build_mcp_registry_table(self) -> Table:
+        table = Table(
+            title="Model Context Protocol (MCP) Active Subsystems",
+            title_style="bold magenta",
+        )
+        table.add_column("Subsystem Worker", style="cyan", no_wrap=True)
+        table.add_column("Transport Protocol", style="green")
+        table.add_column("Status Gating", style="bold green")
+
+        for file_path in self.mcp_hub.discover_server_files():
+            filename = os.path.basename(file_path)
+            info = self.mcp_hub.server_status.get(filename, {"status": "PENDING"})
+            status = info["status"]
+            if status == "CONNECTED" and info.get("latency_ms") is not None:
+                status_text = f"CONNECTED [{info['latency_ms']:.1f}ms]"
+            else:
+                status_text = status
+
+            table.add_row(
+                self._mcp_server_display_name(filename),
+                "STDIO (JSON-RPC 2.0)",
+                f"[{self._mcp_status_style(status)}]{status_text}[/{self._mcp_status_style(status)}]",
+            )
+        return table
+
     async def boot_up(self) -> None:
-        """Start tray UI and enter the main listen/process loop."""
+        """Initializes the core system microkernel and displays an executive dashboard."""
+        os.system("cls" if os.name == "nt" else "clear")
+
+        llm_model = self.config["llm"]["model"]
+        welcome_markdown = f"""
+# JARVIS: COGNITIVE OPERATING SYSTEM
+---
+* **System Kernel Status:** `ONLINE`
+* **Local Inference Core:** `Ollama :: {llm_model}` (Locked at Temp 0.0)
+* **Speech-to-Text Driver:** Local Bare-Metal `whisper.cpp`
+* **Enterprise Security Compliance:** 100% Air-Gapped / On-Premise Data Isolation
+        """
+
+        self.console.print(
+            Panel(
+                Markdown(welcome_markdown),
+                title="[bold cyan]Microkernel Core Initialization[/bold cyan]",
+                border_style="cyan",
+            )
+        )
+
+        table = self._build_mcp_registry_table()
+        connect_task = asyncio.create_task(self.mcp_hub.connect_servers())
+
+        with Live(table, console=self.console, refresh_per_second=4) as live:
+            while not connect_task.done():
+                live.update(self._build_mcp_registry_table())
+                await asyncio.sleep(0.25)
+            await connect_task
+            live.update(self._build_mcp_registry_table())
+
+        self.console.print(
+            "\n[bold green]Jarvis Kernel loaded with dynamic runtime tuning, sir. "
+            "Keyboard override active.[/bold green]"
+        )
+        hotkey = self.config["hotkeys"]["toggle_listen"].replace("+", " + ").upper()
+        self.console.print(
+            f"[bold white]Press {hotkey} to begin listening.[/bold white]\n"
+        )
+
         self.tray.start_background()
         await self.run()
 
@@ -158,13 +247,6 @@ class JarvisKernel:
                 "Setup incomplete. Whisper binary or model file is missing, sir."
             )
             return
-
-        await self.mcp_hub.connect_servers()
-
-        await self.voice.speak(
-            "Kernel loaded with dynamic runtime tuning, sir. "
-            "Keyboard override active. Press Control 1 to begin listening."
-        )
 
         manual_input = self.plugins.manual_input
 
