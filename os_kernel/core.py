@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from pathlib import Path
 
 from rich.console import Console
 from rich.live import Live
@@ -9,12 +10,15 @@ from rich.panel import Panel
 from rich.table import Table
 
 from os_kernel.config_loader import resolve_active_config
+from os_kernel.intent_router import IntentRouterLayer, normalize_track
 from os_kernel.logs.log_config import get_jarvis_logger
 from os_kernel.mcp.mcp_client_hub import MCPClientHub
 from os_kernel.plugin.plugin_registry import PluginRegistry
+from os_kernel.system_states import SystemStageManager
+from os_kernel.tauri_bridge import TauriBridge
 from os_kernel.temperature.system_states import SystemStateEngine
 from drivers.audio import OfflineAudioInput
-from drivers.llm import LLMManager
+from drivers.llm import LLMManager, StateAwareLLMManager
 from drivers.tts import TTSManager
 from drivers.tray import TrayManager
 
@@ -42,17 +46,30 @@ class JarvisKernel:
         self.should_listen = False
 
         assistant_cfg = self.config.get("assistant") or {}
-        self.brain = LLMManager(
-            llm_config=self.config.get("llm") or {},
-            system_prompt=assistant_cfg.get("system_prompt", ""),
+        llm_cfg = self.config.get("llm") or {}
+        self.stage_manager = SystemStageManager()
+        self.llm_router = StateAwareLLMManager(
+            llm_config=llm_cfg,
+            stage_manager=self.stage_manager,
+            base_url=self._ollama_v1_url(llm_cfg),
         )
+        self.brain = LLMManager(
+            llm_config=llm_cfg,
+            system_prompt=assistant_cfg.get("system_prompt", ""),
+            stage_manager=self.stage_manager,
+            stage_orchestrator=self.llm_router,
+        )
+        self.intent_router = IntentRouterLayer(llm_config=llm_cfg)
+        self.tauri_bridge = TauriBridge()
         self.voice = TTSManager(voice=self.config["tts"]["voice"])
 
         self.plugins = PluginRegistry()
+        self.app_launcher = None
         self.mcp_hub = MCPClientHub()
         self.state_engine = SystemStateEngine()
 
         self.plugins.discover()
+        self.app_launcher = self.plugins.app_launcher
 
         self.tray = TrayManager(
             toggle_callback=self._on_tray_toggle,
@@ -67,6 +84,36 @@ class JarvisKernel:
     def _on_tray_exit(self) -> None:
         self.running = False
         print("[Kernel UI: Initiating shutdown]")
+
+    @property
+    def tauri_ipc(self) -> TauriBridge:
+        """Alias for the Tauri/React IPC bridge used by the desktop shell."""
+        return self.tauri_bridge
+
+    @property
+    def tts(self) -> TTSManager:
+        """Alias for the voice synthesis driver."""
+        return self.voice
+
+    @staticmethod
+    def _ollama_v1_url(llm_cfg: dict) -> str:
+        root = str(
+            llm_cfg.get("url") or llm_cfg.get("base_url", "http://localhost:11434")
+        ).rstrip("/")
+        return f"{root}/v1"
+
+    async def _emit_active_tab(self, current_stage: str, parsed_payload: dict) -> None:
+        await self.tauri_ipc.emit(
+            "switch-active-tab",
+            {"target_tab": current_stage},
+        )
+        await self.tauri_ipc.emit(
+            "jarvis-focus-changed",
+            {
+                "active_tab": current_stage,
+                "staged_context": parsed_payload,
+            },
+        )
 
     def _read_skills_handbook(self) -> str:
         """Reads the custom skills profile directly from disk."""
@@ -104,13 +151,358 @@ class JarvisKernel:
         )
         return runtime_config
 
+    @staticmethod
+    def _merge_track_runtime(track: str, runtime_config: dict) -> dict:
+        """Override state-engine temperature when the intent router selects a pipeline track."""
+        track_overrides = {
+            "TRACK_FILE_ANALYSIS": {
+                "temperature": 0.2,
+                "description": "File Analysis Pipeline (Intent Router)",
+            },
+            "TRACK_TMS": {
+                "temperature": 0.0,
+                "description": "Task Management Pipeline (Intent Router)",
+            },
+            "TRACK_BROWSER_AUTOMATION": {
+                "temperature": 0.0,
+                "description": "Browser Automation Pipeline (Intent Router)",
+            },
+            "TRACK_SYSTEM_COMMUNICATION": {
+                "temperature": 0.0,
+                "description": "Communication Pipeline (Outlook / Webex)",
+            },
+        }
+        override = track_overrides.get(track)
+        if not override:
+            return runtime_config
+        merged = dict(runtime_config)
+        merged.update(override)
+        return merged
+
+    async def speak_and_update_ui(
+        self, message: str, *, user_text: str | None = None
+    ) -> None:
+        await self.tauri_bridge.emit("jarvis-reply", {"text": message})
+        await self.voice.speak(message)
+        if user_text:
+            memory = self.plugins.memory
+            if memory:
+                memory.update_memory(user_text, message)
+
+    async def _run_llm_turn(
+        self,
+        query_text: str,
+        tools: list,
+        *,
+        user_text: str,
+        track: str,
+        locked_stage: str | None = None,
+        staged_context: dict | None = None,
+    ) -> None:
+        runtime_config = self._evaluate_runtime_config(query_text)
+        runtime_config = self._merge_track_runtime(track, runtime_config)
+        print(
+            f"[Kernel Pipeline Track: {track} -> {runtime_config['description']} "
+            f"(Temp: {runtime_config['temperature']})]"
+        )
+
+        ai_response = self.brain.generate_tool_aware_response(
+            query_text,
+            tools,
+            temperature=runtime_config["temperature"],
+            active_stage=locked_stage or track,
+            staged_context=staged_context,
+        )
+
+        if ai_response.tool_calls:
+            for call in ai_response.tool_calls:
+                execution_reply = await self.mcp_hub.call_tool(
+                    call.name, call.arguments
+                )
+                await self.speak_and_update_ui(execution_reply, user_text=user_text)
+            return
+
+        reply = ai_response.text or ""
+        await self.speak_and_update_ui(reply, user_text=user_text)
+
+    async def execute_standard_chat(
+        self,
+        user_text: str,
+        clean_query: str | None = None,
+        route: dict | None = None,
+        *,
+        locked_stage: str | None = None,
+        staged_context: dict | None = None,
+    ) -> None:
+        query_text = clean_query or user_text
+        track = normalize_track((route or {}).get("target", "TRACK_CONVERSATION"))
+        await self._run_llm_turn(
+            query_text,
+            self.mcp_hub.tools_manifest,
+            user_text=user_text,
+            track=track,
+            locked_stage=locked_stage,
+            staged_context=staged_context,
+        )
+
+    async def execute_with_subset_tools(
+        self,
+        clean_query: str,
+        route: dict,
+        user_text: str,
+        *,
+        target_pool: str = "tms_server",
+        locked_stage: str | None = None,
+        staged_context: dict | None = None,
+    ) -> None:
+        tools = self.mcp_hub.tools_for_pool(target_pool)
+        if not tools:
+            print(
+                f"[Kernel TMS: pool '{target_pool}' has no connected tools — "
+                "falling back to standard chat]"
+            )
+            await self.execute_standard_chat(
+                user_text,
+                clean_query,
+                route,
+                locked_stage=locked_stage,
+                staged_context=staged_context,
+            )
+            return
+
+        await self._run_llm_turn(
+            clean_query,
+            tools,
+            user_text=user_text,
+            track="TRACK_TMS",
+            locked_stage=locked_stage,
+            staged_context=staged_context,
+        )
+
+    async def execute_silent_browser_task(
+        self,
+        action_query: str,
+        *,
+        user_text: str,
+        locked_stage: str | None = None,
+        staged_context: dict | None = None,
+    ) -> None:
+        route = {
+            "normalized_query": action_query,
+            "extracted_parameters": (staged_context or {}).get("meta", {}),
+            "locked_stage": locked_stage,
+            "staged_context": staged_context,
+        }
+        await self.execute_browser_automation(route, user_text)
+
+    async def execute_browser_automation(self, route: dict, user_text: str) -> None:
+        params = route.get("extracted_parameters") or {}
+        print(f"[Kernel Browser Automation: params={params}]")
+        reply = (
+            "Sir, the Playwright browser automation workers are not yet mounted "
+            "in this kernel build."
+        )
+        await self.speak_and_update_ui(reply, user_text=user_text)
+
+    async def execute_tms_task(
+        self,
+        action_query: str,
+        *,
+        user_text: str,
+        locked_stage: str | None = None,
+        staged_context: dict | None = None,
+    ) -> None:
+        route = {
+            "normalized_query": action_query,
+            "target": "TRACK_TMS",
+            "extracted_parameters": (staged_context or {}).get("meta", {}),
+            "locked_stage": locked_stage,
+            "staged_context": staged_context,
+        }
+        await self.execute_with_subset_tools(
+            action_query,
+            route,
+            user_text,
+            target_pool="tms_server",
+            locked_stage=locked_stage,
+            staged_context=staged_context,
+        )
+
+    @staticmethod
+    def _paths_from_routing(route: dict) -> list[Path]:
+        params = route.get("extracted_parameters") or {}
+        paths: list[Path] = []
+        for key in ("path", "file", "filepath", "target_file"):
+            value = params.get(key)
+            if value:
+                paths.append(Path(str(value)))
+        for key in ("paths", "files"):
+            values = params.get(key)
+            if isinstance(values, list):
+                paths.extend(Path(str(item)) for item in values)
+        return paths
+
+    @staticmethod
+    def _read_file_snapshot(path: Path, max_chars: int = 12000) -> str:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return f"[unreadable: {exc}]"
+        if len(text) > max_chars:
+            return text[:max_chars] + "\n... [truncated]"
+        return text
+
+    async def execute_file_diff_agent(
+        self,
+        route: dict,
+        user_text: str,
+        *,
+        locked_stage: str | None = None,
+        staged_context: dict | None = None,
+    ) -> None:
+        clean_query = route.get("normalized_query") or user_text
+        paths = self._paths_from_routing(route)
+
+        if paths:
+            blocks = []
+            for path in paths[:3]:
+                blocks.append(f"### {path}\n{self._read_file_snapshot(path)}")
+            query_text = (
+                f"{clean_query}\n\n--- File snapshot context ---\n" + "\n\n".join(blocks)
+            )
+        else:
+            query_text = clean_query
+
+        await self._run_llm_turn(
+            query_text,
+            self.mcp_hub.tools_manifest,
+            user_text=user_text,
+            track="TRACK_FILE_ANALYSIS",
+            locked_stage=locked_stage,
+            staged_context=staged_context,
+        )
+
+    async def execute_communication_task(
+        self,
+        action_query: str,
+        *,
+        user_text: str,
+        locked_stage: str | None = None,
+        staged_context: dict | None = None,
+    ) -> None:
+        route = {
+            "normalized_query": action_query,
+            "target": "TRACK_SYSTEM_COMMUNICATION",
+            "extracted_parameters": (staged_context or {}).get("meta", {}),
+            "locked_stage": locked_stage,
+            "staged_context": staged_context,
+        }
+        tools = self.mcp_hub.tools_for_pool("outlook_server")
+        if tools:
+            await self._run_llm_turn(
+                action_query,
+                tools,
+                user_text=user_text,
+                track="TRACK_SYSTEM_COMMUNICATION",
+                locked_stage=locked_stage,
+                staged_context=staged_context,
+            )
+            return
+        await self.execute_standard_chat(
+            user_text,
+            action_query,
+            route=route,
+            locked_stage=locked_stage,
+            staged_context=staged_context,
+        )
+
+    async def on_command_received(self, raw_voice_text: str) -> None:
+        """State-aware routing layer: latch stage, parse payload, emit UI tab, execute track."""
+        # 1. Standardize and check strings through phonetic dictionaries
+        active_stage, action_query = self.stage_manager.clean_and_evaluate(
+            raw_voice_text
+        )
+
+        # TERMINATION INTERCEPT (runs locally before LLM processing)
+        if active_stage == "TRACK_TERMINATE":
+            print(
+                f"\n[Kernel] Termination sequence caught from input: "
+                f"'{raw_voice_text}'"
+            )
+            print(
+                "[Kernel] Disconnecting local hardware hooks and exiting process..."
+            )
+            self.running = False
+
+            if hasattr(self, "tts") and self.tts:
+                await self.tts.speak("Goodbye, sir.")
+
+            await self.tauri_bridge.emit(
+                "system-will-exit",
+                {"status": "shutdown"},
+            )
+
+            await asyncio.sleep(1.2)
+            sys.exit(0)
+
+        # 2. Not a stop phrase — proceed to standard LLM routing track
+        llm_payload = self.llm_router.process_staged_query(raw_voice_text)
+        current_stage = llm_payload.get("active_stage", active_stage)
+        action_query = llm_payload.get("action_query", action_query)
+
+        print(
+            f"[Kernel on_command_received: stage={current_stage} "
+            f"action={action_query!r} meta={llm_payload.get('meta', {})}]"
+        )
+
+        await self._emit_active_tab(current_stage, llm_payload)
+
+        llm_kwargs = {
+            "locked_stage": current_stage,
+            "staged_context": llm_payload,
+        }
+
+        if current_stage == "TRACK_BROWSER_AUTOMATION":
+            await self.execute_silent_browser_task(
+                action_query, user_text=raw_voice_text, **llm_kwargs
+            )
+        elif current_stage == "TRACK_TMS":
+            await self.execute_tms_task(
+                action_query, user_text=raw_voice_text, **llm_kwargs
+            )
+        elif current_stage == "TRACK_FILE_ANALYSIS":
+            route = {
+                "normalized_query": action_query,
+                "extracted_parameters": llm_payload.get("meta", {}),
+                **llm_kwargs,
+            }
+            await self.execute_file_diff_agent(route, raw_voice_text, **llm_kwargs)
+        elif current_stage == "TRACK_SYSTEM_COMMUNICATION":
+            await self.execute_communication_task(
+                action_query, user_text=raw_voice_text, **llm_kwargs
+            )
+        elif current_stage == "TRACK_SYSTEM_UTILITY":
+            if self.app_launcher:
+                utility_reply = self.app_launcher.execute(action_query)
+                if utility_reply:
+                    await self.speak_and_update_ui(
+                        utility_reply, user_text=raw_voice_text
+                    )
+                    return
+            await self.speak_and_update_ui(
+                "I could not map that utility command, sir.",
+                user_text=raw_voice_text,
+            )
+        else:
+            await self.execute_standard_chat(
+                raw_voice_text,
+                action_query,
+                route={"target": current_stage, "staged_context": llm_payload},
+                **llm_kwargs,
+            )
+
     async def process_user_input(self, user_text: str) -> None:
         try:
-            if "exit" in user_text.lower() or "shutdown" in user_text.lower():
-                self.running = False
-                await self.voice.speak("Powering down.")
-                return
-
             if self._is_skills_inquiry(user_text):
                 handbook_text = self._read_skills_handbook()
                 await self.voice.speak(handbook_text)
@@ -119,39 +511,13 @@ class JarvisKernel:
             llm_context = {"messages": []}
             self.plugins.inject_context(user_text, llm_context)
 
-            command_reply = self.plugins.try_intercept(user_text)
-            if command_reply:
-                await self.voice.speak(command_reply)
-                return
+            if self.app_launcher:
+                local_intercept = self.app_launcher.execute(user_text)
+                if local_intercept:
+                    await self.speak_and_update_ui(local_intercept, user_text=user_text)
+                    return
 
-            runtime_config = self._evaluate_runtime_config(user_text)
-            target_temp = runtime_config["temperature"]
-
-            ai_response = self.brain.generate_tool_aware_response(
-                user_text,
-                self.mcp_hub.tools_manifest,
-                temperature=target_temp,
-            )
-
-            if ai_response.tool_calls:
-                for call in ai_response.tool_calls:
-                    execution_reply = await self.mcp_hub.call_tool(
-                        call.name, call.arguments
-                    )
-                    await self.voice.speak(execution_reply)
-
-                memory = self.plugins.memory
-                if memory:
-                    memory.update_memory(user_text, execution_reply)
-                return
-
-            reply = ai_response.text
-
-            memory = self.plugins.memory
-            if memory:
-                memory.update_memory(user_text, reply)
-
-            await self.voice.speak(reply)
+            await self.on_command_received(user_text)
         except Exception:
             self.log.exception("Failed to process user input")
 

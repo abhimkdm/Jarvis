@@ -71,6 +71,13 @@ def _log_mcp_failure(file_path: str, exc: BaseException) -> None:
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
+TOOL_POOLS: dict[str, frozenset[str]] = {
+    "tms_server": frozenset({"tms_server.py"}),
+    "apps_server": frozenset({"apps_server.py"}),
+    "outlook_server": frozenset({"outlook_server.py"}),
+    "notepad_server": frozenset({"notepad_server.py"}),
+}
+
 
 class MCPClientHub:
     def __init__(self):
@@ -150,6 +157,7 @@ class MCPClientHub:
                             "name": tool.name,
                             "description": tool.description,
                             "inputSchema": tool.inputSchema,
+                            "server": server_label,
                         })
 
                     await self._shutdown_event.wait()
@@ -178,6 +186,16 @@ class MCPClientHub:
         self._server_tasks.clear()
         self.sessions.clear()
         self.server_status.clear()
+
+    def tools_for_pool(self, target_pool: str) -> list[dict]:
+        allowed = TOOL_POOLS.get(target_pool)
+        if allowed is None:
+            return list(self.tools_manifest)
+        return [
+            tool
+            for tool in self.tools_manifest
+            if tool.get("server") in allowed
+        ]
 
     async def call_tool(self, tool_name, arguments):
         """Sends a JSON-RPC execution request with loose string tolerance."""

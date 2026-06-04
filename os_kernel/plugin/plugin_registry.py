@@ -39,6 +39,10 @@ class PluginRegistry:
     def manual_input(self):
         return self._named.get("ManualInputPlugin")
 
+    @property
+    def app_launcher(self):
+        return self._named.get("AppLauncherPlugin")
+
     def inject_context(self, user_text: str, context: dict) -> None:
         for plugin in self.plugins:
             plugin.execute(user_text, context=context)
