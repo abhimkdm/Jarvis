@@ -1,14 +1,27 @@
+# Jarvis main configuration (shared settings)
+# LLM profiles live in config.local.yaml and config.deployed.yaml
+#
+# environment:
+#   local     — always use config.local.yaml (Ollama)
+#   deployed  — use config.deployed.yaml; fall back to local if unavailable
+#   auto      — try deployed first, then local (same as deployed + fallback)
+#
+# Override at runtime: set JARVIS_ENV=local|deployed|auto
+
+environment: local
+fallback_to_local: true
+
+profiles:
+  local: config.local.yaml
+  deployed: config.deployed.yaml
+
 assistant:
   name: "Jarvis"
   system_prompt: |
     You are Jarvis, a localized desktop AI assistant running on a Microkernel Architecture.
-    You must be completely honest about your capabilities. 
-    CRITICAL: Never claim you can perform actions outside of your explicitly registered system tools and plugins. 
+    You must be completely honest about your capabilities.
+    CRITICAL: Never claim you can perform actions outside of your explicitly registered system tools and plugins.
     If a user asks what you can do, format your response strictly using the Active System Capabilities provided below.
-    
-llm:
-  model: "llama3.2:1b"
-  url: "http://localhost:11434/v1"
 
 tts:
   voice: "en-US-BrianNeural"

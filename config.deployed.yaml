@@ -1,0 +1,14 @@
+# Org-hosted LLM (disabled until URL and credentials are configured).
+# Jarvis falls back to config.local.yaml when this profile is unreachable.
+
+llm:
+  profile: deployed
+  provider: openai_compatible
+  model: "gpt-4o-mini"
+  base_url: "https://your-ai-gateway.example.com/v1"
+  chat_path: "/chat/completions"
+  api_key_env: "JARVIS_API_KEY"
+  health_check:
+    url: "https://your-ai-gateway.example.com/v1/models"
+    method: GET
+    timeout_seconds: 5

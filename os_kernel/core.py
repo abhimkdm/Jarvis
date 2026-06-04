@@ -2,13 +2,13 @@ import asyncio
 import os
 import sys
 
-import yaml
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
+from os_kernel.config_loader import resolve_active_config
 from os_kernel.logs.log_config import get_jarvis_logger
 from os_kernel.mcp.mcp_client_hub import MCPClientHub
 from os_kernel.plugin.plugin_registry import PluginRegistry
@@ -25,11 +25,27 @@ class JarvisKernel:
     def __init__(self, config_path: str = "config.yaml"):
         self.console = Console()
         self.log = get_jarvis_logger()
-        self.config = self._load_config(config_path)
+        self.config = resolve_active_config(config_path)
+        llm_boot = self.config.get("llm") or {}
+        print(
+            f"[Kernel Config: LLM profile={llm_boot.get('active_profile', 'local')} "
+            f"provider={llm_boot.get('provider', 'ollama')} "
+            f"requested={llm_boot.get('requested_environment', 'local')}"
+            + (
+                " (deployed unavailable — local fallback)"
+                if llm_boot.get("fallback_used")
+                else ""
+            )
+            + "]"
+        )
         self.running = True
         self.should_listen = False
 
-        self.brain = LLMManager(model=self.config["llm"]["model"])
+        assistant_cfg = self.config.get("assistant") or {}
+        self.brain = LLMManager(
+            llm_config=self.config.get("llm") or {},
+            system_prompt=assistant_cfg.get("system_prompt", ""),
+        )
         self.voice = TTSManager(voice=self.config["tts"]["voice"])
 
         self.plugins = PluginRegistry()
@@ -43,11 +59,6 @@ class JarvisKernel:
             exit_callback=self._on_tray_exit,
             hotkey=self.config["hotkeys"]["toggle_listen"],
         )
-
-    @staticmethod
-    def _load_config(config_path: str) -> dict:
-        with open(config_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
 
     def _on_tray_toggle(self, listening_status: bool) -> None:
         self.should_listen = listening_status
@@ -192,14 +203,23 @@ class JarvisKernel:
         """Initializes the core system microkernel and displays an executive dashboard."""
         os.system("cls" if os.name == "nt" else "clear")
 
-        llm_model = self.config["llm"]["model"]
+        llm_cfg = self.config.get("llm") or {}
+        llm_model = llm_cfg.get("model", "unknown")
+        active = llm_cfg.get("active_profile", "local")
+        provider = llm_cfg.get("provider", "ollama")
+        fallback = llm_cfg.get("fallback_used", False)
+        profile_line = f"`{active}` ({provider})"
+        if fallback:
+            profile_line += " — deployed unreachable, using local fallback"
+
         welcome_markdown = f"""
 # JARVIS: COGNITIVE OPERATING SYSTEM
 ---
 * **System Kernel Status:** `ONLINE`
-* **Local Inference Core:** `Ollama :: {llm_model}` (Locked at Temp 0.0)
+* **LLM Profile:** {profile_line}
+* **Model:** `{llm_model}`
 * **Speech-to-Text Driver:** Local Bare-Metal `whisper.cpp`
-* **Enterprise Security Compliance:** 100% Air-Gapped / On-Premise Data Isolation
+* **Audio / MCP / Plugins:** Local on device
         """
 
         self.console.print(

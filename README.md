@@ -52,7 +52,10 @@ flowchart LR
 ```
 Jarvis/
 ├── main.py                      # Entry point — boots JarvisKernel
-├── config.yaml                  # Assistant, LLM, TTS, audio, and hotkey settings
+├── config.yaml                  # Shared settings + environment mode
+├── config.local.yaml            # Ollama / local LLM profile
+├── config.deployed.yaml         # Org-hosted LLM profile (optional)
+├── config.deployed.example.yaml # Template for deployed profile
 ├── requirements.txt
 ├── os_kernel/                   # Microkernel core
 │   ├── core.py                  # JarvisKernel — main async loop and routing
@@ -119,7 +122,7 @@ pipwin install pyaudio
 ### 2. Set up Ollama
 
 ```powershell
-ollama pull llama3.2:1b
+ollama pull llama3.2:3b
 ollama serve
 ```
 
@@ -135,26 +138,51 @@ Download `ggml-tiny.en.bin` from [whisper.cpp models](https://huggingface.co/gge
 
 ## Configuration
 
+Settings are split across three files:
+
+| File | Purpose |
+|------|---------|
+| `config.yaml` | Shared settings (assistant, TTS, audio, hotkeys) + environment mode |
+| `config.local.yaml` | Local Ollama profile (default fallback) |
+| `config.deployed.yaml` | Org-hosted OpenAI-compatible gateway |
+
+Copy `config.deployed.example.yaml` to `config.deployed.yaml` and set your gateway URL. Set API keys via environment variable (default: `JARVIS_API_KEY`), never in the repo.
+
 ```yaml
-assistant:
-  name: "Jarvis"
-  system_prompt: |
-    You are Jarvis, a localized desktop AI assistant running on a Microkernel Architecture.
-    You must be completely honest about your capabilities.
+# config.yaml
+environment: local   # local | deployed | auto
+fallback_to_local: true
 
+profiles:
+  local: config.local.yaml
+  deployed: config.deployed.yaml
+```
+
+| `environment` | Behavior |
+|---------------|----------|
+| `local` | Always use Ollama (`config.local.yaml`) |
+| `deployed` | Use org gateway; fall back to local if unreachable (when `fallback_to_local: true`) |
+| `auto` | Try deployed first, then local if unavailable |
+
+Override at runtime: `set JARVIS_ENV=auto` (Windows) before `python main.py`.
+
+```yaml
+# config.local.yaml
 llm:
-  model: "llama3.2:1b"
-  url: "http://localhost:11434/v1"
+  provider: ollama
+  model: "llama3.2:3b"
+  base_url: "http://localhost:11434"
+  chat_path: "/api/chat"
+```
 
-tts:
-  voice: "en-US-BrianNeural"
-
-audio:
-  model_path: "models/ggml-tiny.en.bin"
-  bin_path: "whisper_bin/whisper-cli.exe"
-
-hotkeys:
-  toggle_listen: "ctrl+1"
+```yaml
+# config.deployed.yaml
+llm:
+  provider: openai_compatible
+  model: "gpt-4o-mini"
+  base_url: "https://your-ai-gateway.example.com/v1"
+  chat_path: "/chat/completions"
+  api_key_env: "JARVIS_API_KEY"
 ```
 
 ## Usage
@@ -274,7 +302,7 @@ Export the class from `__init__.py`. Restart Jarvis — it will appear in the st
 ### `drivers/llm.py` — `LLMManager`
 
 ```python
-llm = LLMManager(base_url="http://localhost:11434/v1", model="llama3.2:1b")
+llm = LLMManager(base_url="http://localhost:11434/v1", model="llama3.2:3b")
 
 # Standard chat
 reply = llm.generate_response(messages_payload)

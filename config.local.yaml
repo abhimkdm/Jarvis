@@ -1,0 +1,12 @@
+# Local development profile — Ollama on this machine (default fallback)
+
+llm:
+  profile: local
+  provider: ollama
+  model: "llama3.2:3b"
+  base_url: "http://localhost:11434"
+  chat_path: "/api/chat"
+  health_check:
+    url: "http://localhost:11434/api/tags"
+    method: GET
+    timeout_seconds: 3
